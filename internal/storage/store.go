@@ -78,29 +78,54 @@ func normalizeSnapshot(value domain.Snapshot) (domain.Snapshot, error) {
 	if value.RunIndex == nil {
 		value.RunIndex = map[string]string{}
 	}
-	value.LoopClaims = map[string]string{}
-	for id, run := range value.Runs {
-		if run.State != domain.RunFermenting {
-			run.ControlLoop = ""
-			value.Runs[id] = run
-			continue
-		}
-		if !domain.IsControlLoop(run.ControlLoop) {
-			run.ControlLoop = ""
-			value.Runs[id] = run
-			continue
-		}
-		if _, exists := value.LoopClaims[run.ControlLoop]; exists {
-			run.ControlLoop = ""
-			value.Runs[id] = run
-			continue
-		}
-		value.LoopClaims[run.ControlLoop] = id
+	if value.LoopClaims == nil {
+		value.LoopClaims = map[string]string{}
+	}
+	if err := validateLoopClaims(value); err != nil {
+		return domain.Snapshot{}, err
 	}
 	if err := validateIndexes(value); err != nil {
 		return domain.Snapshot{}, err
 	}
 	return value, nil
+}
+
+// validateLoopClaims checks that the persisted loop claims and the run records
+// describe the same occupancy facts. A loop is held only by a fermenting or
+// conditioning run, each claim must name the run that holds the loop, and each
+// run holding a loop must be the registered claimant. Conflicting state stops
+// startup instead of silently rewriting occupancy.
+func validateLoopClaims(value domain.Snapshot) error {
+	for loop, runID := range value.LoopClaims {
+		if !domain.IsControlLoop(loop) {
+			return fmt.Errorf("loop claims contain unknown control loop %q", loop)
+		}
+		run, found := value.Runs[runID]
+		if !found {
+			return fmt.Errorf("loop claim %q references an unknown run", loop)
+		}
+		if run.State != domain.RunFermenting && run.State != domain.RunConditioning {
+			return fmt.Errorf("loop claim %q references an inactive run", loop)
+		}
+		if run.ControlLoop != loop {
+			return fmt.Errorf("loop claim %q does not match its run", loop)
+		}
+	}
+	for id, run := range value.Runs {
+		if run.ControlLoop == "" {
+			continue
+		}
+		if !domain.IsControlLoop(run.ControlLoop) {
+			return fmt.Errorf("run %s holds an unknown control loop", id)
+		}
+		if run.State != domain.RunFermenting && run.State != domain.RunConditioning {
+			return fmt.Errorf("run %s holds a control loop while inactive", id)
+		}
+		if claimant, found := value.LoopClaims[run.ControlLoop]; !found || claimant != id {
+			return fmt.Errorf("run %s control loop is not registered in loop claims", id)
+		}
+	}
+	return nil
 }
 
 func validateIndexes(value domain.Snapshot) error {

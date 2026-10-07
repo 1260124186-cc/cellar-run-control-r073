@@ -138,7 +138,7 @@ func (s *Service) StartRun(
 		}
 		loop := ""
 		for _, candidate := range domain.ControlLoops {
-			if snapshot.LoopClaims[candidate] != run.ID {
+			if _, held := snapshot.LoopClaims[candidate]; !held {
 				loop = candidate
 				break
 			}
@@ -179,9 +179,7 @@ func (s *Service) AbortRun(
 		if err := run.Abort(s.clock.Now()); err != nil {
 			return err
 		}
-		if !hadStarted {
-			releaseRunControlLoop(snapshot, &run)
-		}
+		releaseRunControlLoop(snapshot, &run)
 		if run.VesselID != nil {
 			vessel, ok := snapshot.Vessels[*run.VesselID]
 			if !ok {
